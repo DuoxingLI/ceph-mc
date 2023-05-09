@@ -623,6 +623,46 @@ AsyncConnectionRef AsyncMessenger::create_connect(
   return conn;
 }
 
+AsyncConnectionRef AsyncMessenger::create_multi_connect(const entity_addrvec_t& mc_daemon_addrs,
+  const entity_addrvec_t& addrs1,const entity_addrvec_t& addrs2, int type, bool anon)
+{
+  ceph_assert(ceph_mutex_is_locked(lock));
+
+  ldout(cct, 10) << __func__ << " " << addrs
+      << ", creating connection and registering" << dendl;
+
+  // here is where we decide which of the addrs to connect to.  always prefer
+  // the first one, if we support it.
+  entity_addr_t target;
+  for (auto& a : addrs.v) {
+    if (!a.is_msgr2() && !a.is_legacy()) {
+      continue;
+    }
+    // FIXME: for ipv4 vs ipv6, check whether local host can handle ipv6 before
+    // trying it?  for now, just pick whichever is listed first.
+    target = a;
+    break;
+  }
+
+  // create connection
+  Worker *w = stack->get_worker();
+  auto conn = ceph::make_ref<AsyncConnection>(cct, this, &dispatch_queue, w,
+						target.is_msgr2(), false);
+  conn->anon = anon;
+  conn->connect_multi(mc_daemon_addrs,addrs1,addrs2, type, target); //unfinished
+  if (anon) {
+    anon_conns.insert(conn);
+  } else {
+    ceph_assert(!conns.count(addrs));
+    ldout(cct, 10) << __func__ << " " << conn << " " << addrs << " "
+		   << *conn->peer_addrs << dendl;
+       // addrs1, addrs2 sorted before
+    multi_conns[make_pair(addrs1,addrs2)] = conn;
+  }
+  w->get_perf_counter()->inc(l_msgr_active_connections);
+
+  return conn;
+}
 
 ConnectionRef AsyncMessenger::get_loopback_connection()
 {
@@ -721,6 +761,36 @@ ConnectionRef AsyncMessenger::connect_to(int type,
     ldout(cct, 10) << __func__ << " " << av << " existing " << conn << dendl;
   } else {
     conn = create_connect(av, type, false);
+    ldout(cct, 10) << __func__ << " " << av << " new " << conn << dendl;
+  }
+
+  return conn;
+}
+
+ConnectionRef AsyncMessenger::connect_to_multi(int type,
+					 const entity_addrvec_t& addrs_1, const entity_addrvec_t& addrs_2, 
+					 bool anon, bool not_local_dest)
+{
+  if (!not_local_dest) {
+    if (*my_addrs == addrs ||
+	(addrs.v.size() == 1 &&
+	 my_addrs->contains(addrs.front()))) {
+      // local
+      return local_connection;
+    }
+  }
+
+  auto av = _filter_addrs(mc_daemon_addrs);
+  std::lock_guard l{lock};
+  if (anon) {
+    return create_connect(av, type, anon);
+  }
+
+  AsyncConnectionRef conn = _lookup_multi_conn(addrs_1, addrs_2);
+  if (conn) {
+    ldout(cct, 10) << __func__ << " " << av << " existing " << conn << dendl;
+  } else {
+    conn = create_multi_connect(av, addrs_1, addrs_2, type, false);
     ldout(cct, 10) << __func__ << " " << av << " new " << conn << dendl;
   }
 

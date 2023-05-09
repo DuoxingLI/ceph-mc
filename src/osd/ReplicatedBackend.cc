@@ -972,6 +972,7 @@ Message * ReplicatedBackend::generate_subop(
   return wr;
 }
 
+//send request to replicas
 void ReplicatedBackend::issue_op(
   const hobject_t &soid,
   const eversion_t &at_version,
@@ -1000,30 +1001,65 @@ void ReplicatedBackend::issue_op(
     bufferlist logs;
     encode(log_entries, logs);
 
-    for (const auto& shard : get_parent()->get_acting_recovery_backfill_shards()) {
-      if (shard == parent->whoami_shard()) continue;
-      const pg_info_t &pinfo = parent->get_shard_info().find(shard)->second;
 
+    //here send messages
+    if (parent->get_acting_recovery_backfill_shards().size() == 3) {
+      //find multicast connection, or create one
       Message *wr;
-      wr = generate_subop(
-	  soid,
-	  at_version,
-	  tid,
-	  reqid,
-	  pg_trim_to,
-	  min_last_complete_ondisk,
-	  new_temp_oid,
-	  discard_temp_oid,
-	  logs,
-	  hset_hist,
-	  op_t,
-	  shard,
-	  pinfo);
-      if (op->op && op->op->pg_trace)
-	wr->trace.init("replicated op", nullptr, &op->op->pg_trace);
-      get_parent()->send_message_osd_cluster(
-	  shard.osd, wr, get_osdmap_epoch());
+      vector<pg_shard_t> shards;
+
+      for (const auto& shard : get_parent()->get_acting_recovery_backfill_shards()) {
+        if (shard == parent->whoami_shard()) continue;
+        const pg_info_t &pinfo = parent->get_shard_info().find(shard)->second;
+
+        wr = generate_subop(
+      soid,
+      at_version,
+      tid,
+      reqid,
+      pg_trim_to,
+      min_last_complete_ondisk,
+      new_temp_oid,
+      discard_temp_oid,
+      logs,
+      hset_hist,
+      op_t,
+      shard,
+      pinfo);
+        if (op->op && op->op->pg_trace)
+    wr->trace.init("replicated op", nullptr, &op->op->pg_trace);
+      shards.push_back(shard);
+      }
+
+      get_parent()->send_message_multi_osd_cluster(shards[0].osd, shards[1].osd, wr, get_osdmap_epoch());
     }
+    else {
+      for (const auto& shard : get_parent()->get_acting_recovery_backfill_shards()) {
+        if (shard == parent->whoami_shard()) continue;
+        const pg_info_t &pinfo = parent->get_shard_info().find(shard)->second;
+
+        Message *wr;
+        wr = generate_subop(
+      soid,
+      at_version,
+      tid,
+      reqid,
+      pg_trim_to,
+      min_last_complete_ondisk,
+      new_temp_oid,
+      discard_temp_oid,
+      logs,
+      hset_hist,
+      op_t,
+      shard,
+      pinfo);
+        if (op->op && op->op->pg_trace)
+    wr->trace.init("replicated op", nullptr, &op->op->pg_trace);
+        get_parent()->send_message_osd_cluster(
+      shard.osd, wr, get_osdmap_epoch());
+      }
+    }
+    
   }
 }
 

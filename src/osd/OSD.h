@@ -259,6 +259,8 @@ public:
 
   ConnectionRef get_con_osd_cluster(int peer, epoch_t from_epoch);
   pair<ConnectionRef,ConnectionRef> get_con_osd_hb(int peer, epoch_t from_epoch);  // (back, front)
+
+  void send_message_multi_osd_cluster(int peer, Message *m, epoch_t from_epoch);
   void send_message_osd_cluster(int peer, Message *m, epoch_t from_epoch);
   void send_message_osd_cluster(std::vector<std::pair<int, Message*>>& messages, epoch_t from_epoch);
   void send_message_osd_cluster(Message *m, Connection *con) {

@@ -547,6 +547,10 @@ public:
       bool anon=false, bool not_local_dest=false) {
 	return connect_to(CEPH_ENTITY_TYPE_OSD, dest, anon, not_local_dest);
   }
+  ConnectionRef connect_to_multi_osd(const entity_addrvec_t& dest_1, const entity_addrvec_t& dest_2, 
+      bool anon=false, bool not_local_dest=false) {
+	return connect_to_multi(CEPH_ENTITY_TYPE_OSD, dest_1, dest_2, anon, not_local_dest);
+  }
   ConnectionRef connect_to_mgr(const entity_addrvec_t& dest,
       bool anon=false, bool not_local_dest=false) {
 	return connect_to(CEPH_ENTITY_TYPE_MGR, dest, anon, not_local_dest);
