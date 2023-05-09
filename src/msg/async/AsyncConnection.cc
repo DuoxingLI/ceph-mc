@@ -485,6 +485,16 @@ void AsyncConnection::connect(const entity_addrvec_t &addrs, int type,
   _connect();
 }
 
+void AsyncConnection::connect_multi(const entity_addrvec_t& mc_daemon_addrs,const entity_addrvec_t& addrs1,
+                                    const entity_addrvec_t& addrs2, int type, entity_addr_t& target){
+  std::lock_guard<std::mutex> l(lock);
+  set_peer_type(type);
+  set_peer_addrs(mc_daemon_addrs);
+  policy = msgr->get_policy(type);
+  target_addr = target;
+  _connect();
+}
+
 void AsyncConnection::_connect()
 {
   ldout(async_msgr->cct, 10) << __func__ << dendl;

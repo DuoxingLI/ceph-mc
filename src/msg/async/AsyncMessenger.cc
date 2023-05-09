@@ -657,7 +657,7 @@ AsyncConnectionRef AsyncMessenger::create_multi_connect(const entity_addrvec_t& 
     ldout(cct, 10) << __func__ << " " << conn << " " << addrs << " "
 		   << *conn->peer_addrs << dendl;
        // addrs1, addrs2 sorted before
-    multi_conns[make_pair(addrs1,addrs2)] = conn;
+    multi_conns[make_sorted_pair(addrs1,addrs2)] = conn;
   }
   w->get_perf_counter()->inc(l_msgr_active_connections);
 

@@ -327,11 +327,19 @@ private:
     return p->second;
   }
 
+  pair<entity_addrvec_t,entity_addrvec_t> make_sorted_pair(const entity_addrvec_t& k1,const entity_addrvec_t& k2) {
+    if (k1<k2) {
+      make_pair(k2,k1);
+    }
+
+    return make_pair(k1,k2);
+  }
+
   const auto& _lookup_multi_conn(const entity_addrvec_t& k1,const entity_addrvec_t& k2) {
     static const AsyncConnectionRef nullref;
     ceph_assert(ceph_mutex_is_locked(lock));
     // k1, k2 sorted before
-    auto p = multi_conns.find(make_pair(k1,k2));
+    auto p = multi_conns.find(make_sorted_pair(k1,k2));
     if (p == multi_conns.end()) {
       return nullref;
     }

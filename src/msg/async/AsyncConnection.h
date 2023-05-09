@@ -120,6 +120,7 @@ public:
 
   // Only call when AsyncConnection first construct
   void connect(const entity_addrvec_t& addrs, int type, entity_addr_t& target);
+  void connect_multi(const entity_addrvec_t& mc_daemon_addrs,const entity_addrvec_t& addrs1,const entity_addrvec_t& addrs2, int type, entity_addr_t& target);
 
   // Only call when AsyncConnection first construct
   void accept(ConnectedSocket socket,

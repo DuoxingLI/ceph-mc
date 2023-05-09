@@ -38,8 +38,8 @@ RDMADispatcher::~RDMADispatcher() {
     kassert(dead_queue_pairs.empty());
 }
 
-RDMADispatcher::RDMADispatcher(Context *c, std::shared_ptr<Infiniband> &ib) : context(c), ib(ib) {
-    common::PerfCounter::PerfCountersBuilder plb(context, "AsyncMessenger::RDMADispatcher", l_msgr_rdma_dispatcher_first,
+RDMADispatcher::RDMADispatcher(CephContext *c, std::shared_ptr<Infiniband> &ib) : cct(c), ib(ib) {
+    common::PerfCounter::PerfCountersBuilder plb(cct, "AsyncMessenger::RDMADispatcher", l_msgr_rdma_dispatcher_first,
                                                  l_msgr_rdma_dispatcher_last);
 
     plb.add_u64_counter(l_msgr_rdma_polling, "polling", "Whether dispatcher thread is polling");
@@ -65,7 +65,7 @@ RDMADispatcher::RDMADispatcher(Context *c, std::shared_ptr<Infiniband> &ib) : co
     plb.add_u64_counter(l_msgr_rdma_active_queue_pair, "active_queue_pair", "Created queue pair number");
 
     perf_logger = plb.create_perf_counters();
-    context->get_perfcounters_collection()->add(perf_logger);
+    cct->get_perfcounters_collection()->add(perf_logger);
     Cycles::init();
 }
 
@@ -77,13 +77,13 @@ void RDMADispatcher::polling_start() {
 
     ib->get_memory_manager()->set_rx_stat_logger(perf_logger);
 
-    tx_cc = ib->create_comp_channel(context);
+    tx_cc = ib->create_comp_channel(cct);
     kassert(tx_cc);
-    rx_cc = ib->create_comp_channel(context);
+    rx_cc = ib->create_comp_channel(cct);
     kassert(rx_cc);
-    tx_cq = ib->create_comp_queue(context, tx_cc);
+    tx_cq = ib->create_comp_queue(cct, tx_cc);
     kassert(tx_cq);
-    rx_cq = ib->create_comp_queue(context, rx_cc);
+    rx_cq = ib->create_comp_queue(cct, rx_cc);
     kassert(rx_cq);
 
     t = std::thread(&RDMADispatcher::polling, this);
@@ -163,11 +163,11 @@ void RDMADispatcher::handle_async_event() {
                               << " qp number: " << qpn << std::endl;
                 } else {
                     conn->fault();
-                    if (qp) {
-                        if (!context->m_rdma_config_->m_use_rdma_cm_) {
-                            enqueue_dead_qp_lockless(qpn);
-                        }
-                    }
+                    // if (qp) {
+                    //     if (!cct->m_rdma_config_->m_use_rdma_cm_) {
+                    //         enqueue_dead_qp_lockless(qpn);
+                    //     }
+                    // }
                 }
             } break;
             case IBV_EVENT_QP_REQ_ERR:
@@ -256,14 +256,6 @@ void RDMADispatcher::polling() {
     bool rearmed = false;
     int r = 0;
 
-    cpu_set_t mask;                                     // cpu核的集合
-    CPU_ZERO(&mask);                                    // 将集合置为空集
-    CPU_SET(context->m_rdma_config_->m_cpu_id, &mask);  // 设置亲和力值
-
-    if (sched_setaffinity(0, sizeof(cpu_set_t), &mask) == -1)  // 设置线程cpu亲和力
-    {
-        std::cout << "warning: could not set CPU affinity, continuing...\n" << std::endl;
-    }
 
     while (true) {
 
@@ -638,11 +630,11 @@ void RDMADispatcher::handle_rx_event(ibv_wc *cqe, int rx_number) {
     polled.clear();
 }
 
-RDMAWorker::RDMAWorker(Context *c, unsigned worker_id) : Worker(c, worker_id), tx_handler(new C_handle_cq_tx(this)) {
+RDMAWorker::RDMAWorker(CephContext *c, unsigned worker_id) : Worker(c, worker_id), tx_handler(new C_handle_cq_tx(this)) {
     // initialize perf_logger
     char name[128];
     sprintf(name, "AsyncMessenger::RDMAWorker-%u", id);
-    common::PerfCounter::PerfCountersBuilder plb(context, name, l_msgr_rdma_first, l_msgr_rdma_last);
+    common::PerfCounter::PerfCountersBuilder plb(cct, name, l_msgr_rdma_first, l_msgr_rdma_last);
 
     plb.add_u64_counter(l_msgr_rdma_tx_no_mem, "tx_no_mem", "The count of no tx buffer");
     plb.add_u64_counter(l_msgr_rdma_tx_parital_mem, "tx_parital_mem", "The count of parital tx buffer");
@@ -657,7 +649,7 @@ RDMAWorker::RDMAWorker(Context *c, unsigned worker_id) : Worker(c, worker_id), t
     plb.add_u64_counter(l_msgr_rdma_pending_sent_conns, "pending_sent_conns", "The count of pending sent conns");
 
     perf_logger = plb.create_perf_counters();
-    context->get_perfcounters_collection()->add(perf_logger);
+    cct->get_perfcounters_collection()->add(perf_logger);
 }
 
 RDMAWorker::~RDMAWorker() { delete tx_handler; }
@@ -670,7 +662,7 @@ int RDMAWorker::listen(entity_addr_t &sa, const SocketOptions &opt, ServerSocket
 
     RDMAServerSocketImpl *p;
 
-    p = new RDMAServerSocketImpl(context, ib, dispatcher, this, sa);
+    p = new RDMAServerSocketImpl(cct, ib, dispatcher, this, sa);
 
     int r = p->listen(sa, opt);
     if (r < 0) {
@@ -687,7 +679,7 @@ int RDMAWorker::connect(const entity_addr_t &addr, const SocketOptions &opts, Co
     dispatcher->polling_start();
 
     RDMAConnectedSocketImpl *p;
-    p = new RDMAConnectedSocketImpl(context, ib, dispatcher, this);
+    p = new RDMAConnectedSocketImpl(cct, ib, dispatcher, this);
     int r = p->try_connect(addr, opts);
 
     if (r < 0) {
@@ -742,21 +734,21 @@ void RDMAWorker::handle_pending_message() {
     dispatcher->notify_pending_workers();
 }
 
-RDMAStack::RDMAStack(Context *context)
-    : NetworkStack(context),
-      infiniband_entity(std::make_shared<Infiniband>(context)),
-      rdma_dispatcher(std::make_shared<RDMADispatcher>(context, infiniband_entity)) {
+RDMAStack::RDMAStack(CephContext *cct)
+    : NetworkStack(cct),
+      infiniband_entity(std::make_shared<Infiniband>(cct)),
+      rdma_dispatcher(std::make_shared<RDMADispatcher>(cct, infiniband_entity)) {
     std::cout << typeid(this).name() << " : " << __func__ << " constructing RDMAStack..." << std::endl;
     std::cout << " creating RDMAStack:" << this << " with dispatcher:" << rdma_dispatcher.get() << std::endl;
 }
 
 RDMAStack::~RDMAStack() {
-    if (context->m_rdma_config_->m_rdma_enable_hugepage_) {
-        unsetenv("RDMAV_HUGEPAGES_SAFE");  // remove env variable on destruction
-    }
+    // if (cct->m_rdma_config_->m_rdma_enable_hugepage_) {
+    //     unsetenv("RDMAV_HUGEPAGES_SAFE");  // remove env variable on destruction
+    // }
 }
 
-Worker *RDMAStack::create_worker(Context *c, unsigned worker_id) {
+Worker *RDMAStack::create_worker(CephContext *c, unsigned worker_id) {
     auto w = new RDMAWorker(c, worker_id);
     w->set_dispatcher(rdma_dispatcher);
     w->set_ib(infiniband_entity);

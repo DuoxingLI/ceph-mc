@@ -29,7 +29,7 @@ static const uint32_t MAX_SHARED_RX_SGE_COUNT = 1;
 static const uint32_t MAX_INLINE_DATA = 0;
 static const uint32_t CQ_DEPTH = 30000;
 
-Port::Port(Context *context, struct ibv_context *ictxt, uint8_t ipn) : ctxt(ictxt), port_num(ipn), gid_idx(context->m_rdma_config_->m_gid_index_) {
+Port::Port(CephContext *cct, struct ibv_context *ictxt, uint8_t ipn) : ctxt(ictxt), port_num(ipn), gid_idx(cct->m_rdma_config_->m_gid_index_) {
     int r = ibv_query_port(ctxt, port_num, &port_attr);
     if (r == -1) {
         std::cout << typeid(this).name() << " : " << __func__ << " query port failed  " << cpp_strerror(errno) << std::endl;
@@ -95,7 +95,7 @@ Port::Port(Context *context, struct ibv_context *ictxt, uint8_t ipn) : ctxt(ictx
 #endif
 }
 
-Device::Device(Context *context, ibv_device *ib_dev) : device(ib_dev), active_port(nullptr) {
+Device::Device(CephContext *cct, ibv_device *ib_dev) : device(ib_dev), active_port(nullptr) {
     kassert(device);
     ctxt = ibv_open_device(device);
     kassert(ctxt);
@@ -109,7 +109,7 @@ Device::Device(Context *context, ibv_device *ib_dev) : device(ib_dev), active_po
     }
 }
 
-Device::Device(Context *context, struct ibv_context *ib_ctx) : device(ib_ctx->device), active_port(nullptr) {
+Device::Device(CephContext *cct, struct ibv_context *ib_ctx) : device(ib_ctx->device), active_port(nullptr) {
     kassert(device);
     ctxt = ib_ctx;
     kassert(ctxt);
@@ -123,10 +123,10 @@ Device::Device(Context *context, struct ibv_context *ib_ctx) : device(ib_ctx->de
     }
 }
 
-void Device::binding_port(Context *context, int port_num) {
+void Device::binding_port(CephContext *cct, int port_num) {
     port_cnt = get_device_attr()->phys_port_cnt;
     for (uint8_t port_id = 1; port_id <= port_cnt; ++port_id) {
-        Port *port = new Port(context, ctxt, port_id);
+        Port *port = new Port(cct, ctxt, port_id);
         if (port_id == port_num && port->get_port_attr()->state == IBV_PORT_ACTIVE) {
             active_port = port;
             std::cout << typeid(this).name() << " : " << __func__ << " found active port " << static_cast<int>(port_id) << std::endl;
@@ -143,9 +143,9 @@ void Device::binding_port(Context *context, int port_num) {
     }
 }
 
-Infiniband::QueuePair::QueuePair(Context *c, Infiniband &infiniband, ibv_qp_type type, int port, ibv_srq *srq, Infiniband::CompletionQueue *txcq,
+Infiniband::QueuePair::QueuePair(CephContext *c, Infiniband &infiniband, ibv_qp_type type, int port, ibv_srq *srq, Infiniband::CompletionQueue *txcq,
                                  Infiniband::CompletionQueue *rxcq, uint32_t tx_queue_len, uint32_t rx_queue_len, rdma_cm_id *cid, uint32_t q_key)
-    : context(c),
+    : cct(c),
       infiniband(infiniband),
       type(type),
       ctxt(infiniband.device->get_context()),
@@ -234,11 +234,11 @@ int Infiniband::QueuePair::modify_qp_to_rtr(void) {
     qpa.ah_attr.grh.hop_limit = 6;
     qpa.ah_attr.grh.dgid = peer_cm_meta.gid;
     qpa.ah_attr.grh.sgid_index = infiniband.get_device()->get_gid_idx();
-    qpa.ah_attr.grh.traffic_class = context->m_rdma_config_->m_rdma_dscp_;
+    qpa.ah_attr.grh.traffic_class = cct->m_rdma_config_->m_rdma_dscp_;
     // qpa.ah_attr.grh.flow_label = 0;
 
     qpa.ah_attr.dlid = peer_cm_meta.lid;
-    qpa.ah_attr.sl = context->m_rdma_config_->m_rdma_sl_;
+    qpa.ah_attr.sl = cct->m_rdma_config_->m_rdma_sl_;
     qpa.ah_attr.src_path_bits = 0;
     qpa.ah_attr.port_num = (uint8_t)(ib_physical_port);
 
@@ -311,7 +311,7 @@ int Infiniband::QueuePair::init() {
     qpia.qp_type = type;                         // RC, UC, UD, or XRC
     qpia.sq_sig_all = 0;                         // only generate CQEs on requested WQEs
 
-    if (!context->m_rdma_config_->m_use_rdma_cm_) {
+    if (!cct->m_rdma_config_->m_use_rdma_cm_) {
         qp = ibv_create_qp(pd, &qpia);
         if (qp == NULL) {
             std::cout << typeid(this).name() << " : " << __func__ << " failed to create queue pair" << cpp_strerror(errno) << std::endl;
@@ -329,7 +329,7 @@ int Infiniband::QueuePair::init() {
             return -1;
         }
     } else {
-        kassert(cm_id->verbs == pd->context);
+        kassert(cm_id->verbs == pd->cct);
         if (rdma_create_qp(cm_id, pd, &qpia)) {
             std::cout << typeid(this).name() << " : " << __func__ << " failed to create queue pair with rdmacm library" << cpp_strerror(errno)
                       << std::endl;
@@ -379,7 +379,7 @@ void Infiniband::QueuePair::gid_to_wire_gid(const ib_cm_meta_t &cm_meta_data, ch
  *   0: means got enough buffer
  * < 0: means error
  */
-int Infiniband::QueuePair::recv_cm_meta(Context *context, int socket_fd) {
+int Infiniband::QueuePair::recv_cm_meta(CephContext *cct, int socket_fd) {
     std::cout << __func__ << std::endl;
     char msg[TCP_MSG_LEN];
     char gid[33];
@@ -407,7 +407,7 @@ int Infiniband::QueuePair::recv_cm_meta(Context *context, int socket_fd) {
     return r;
 }
 
-int Infiniband::QueuePair::send_cm_meta(Context *context, int socket_fd) {
+int Infiniband::QueuePair::send_cm_meta(CephContext *cct, int socket_fd) {
     int retry = 0;
     ssize_t r;
 
@@ -417,8 +417,8 @@ retry:
     gid_to_wire_gid(local_cm_meta, gid);
     // %04x : % 08x : % 08x : % 08x : % 08x : % 04x : % 08x : %04x : % s
     sprintf(msg, "%hx:%x:%x:%x:%x:%hx:%x:%hx:%s", local_cm_meta.lid, local_cm_meta.local_qpn, local_cm_meta.psn, local_cm_meta.peer_qpn,
-            context->m_rdma_config_->m_mc_group.ip_addr_member_1, context->m_rdma_config_->m_mc_group.port_member_1,
-            context->m_rdma_config_->m_mc_group.ip_addr_member_2, context->m_rdma_config_->m_mc_group.port_member_2, gid);
+            cct->get_mc_ip_1(), cct->get_mc_ip_1(),
+            cct->get_mc_ip_2(), cct->get_mc_ip_2(), gid);
     std::cout << typeid(this).name() << " : " << __func__ << " sending: " << local_cm_meta.lid << ", " << local_cm_meta.local_qpn << ", "
               << local_cm_meta.psn << ", " << local_cm_meta.peer_qpn << ", " << gid << std::endl;
     r = ::write(socket_fd, msg, sizeof(msg));
@@ -521,8 +521,8 @@ int Infiniband::QueuePair::get_state() const {
     return qpa.qp_state;
 }
 
-Infiniband::CompletionChannel::CompletionChannel(Context *c, Infiniband &ib)
-    : context(c), infiniband(ib), channel(NULL), cq(NULL), cq_events_that_need_ack(0) {}
+Infiniband::CompletionChannel::CompletionChannel(CephContext *c, Infiniband &ib)
+    : cct(c), infiniband(ib), channel(NULL), cq(NULL), cq_events_that_need_ack(0) {}
 
 Infiniband::CompletionChannel::~CompletionChannel() {
     if (channel) {
@@ -616,7 +616,7 @@ int Infiniband::CompletionQueue::poll_cq(int num_entries, ibv_wc *ret_wc_array) 
     return r;
 }
 
-Infiniband::ProtectionDomain::ProtectionDomain(Context *context, Device *device) : pd(ibv_alloc_pd(device->get_context())) {
+Infiniband::ProtectionDomain::ProtectionDomain(CephContext *cct, Device *device) : pd(ibv_alloc_pd(device->get_context())) {
     if (pd == NULL) {
         std::cout << typeid(this).name() << " : " << __func__ << " failed to allocate infiniband protection domain: " << cpp_strerror(errno)
                   << std::endl;
@@ -774,11 +774,11 @@ int Infiniband::MemoryManager::Cluster::get_buffers(std::vector<Chunk *> &chunks
 
 bool Infiniband::MemoryManager::MemPoolContext::can_alloc(unsigned nbufs) {
     /* unlimited */
-    if (manager->context->m_rdma_config_->m_rdma_receive_buffers_bytes_ <= 0) return true;
-
-    if (n_bufs_allocated + nbufs > (unsigned)manager->context->m_rdma_config_->m_rdma_receive_buffers_bytes_) {
+    if (manager->cct->m_rdma_config_->m_rdma_receive_buffers_bytes_ <= 0) return true;
+    //how to config RDMA?
+    if (n_bufs_allocated + nbufs > (unsigned)manager->cct->m_rdma_config_->m_rdma_receive_buffers_bytes_) {
         std::cout << typeid(this).name() << " : " << __func__ << " WARNING: OUT OF RX BUFFERS: allocated: " << n_bufs_allocated
-                  << " requested: " << nbufs << " limit: " << manager->context->m_rdma_config_->m_rdma_receive_buffers_bytes_ << std::endl;
+                  << " requested: " << nbufs << " limit: " << manager->cct->m_rdma_config_->m_rdma_receive_buffers_bytes_ << std::endl;
         return false;
     }
 
@@ -818,8 +818,8 @@ std::mutex &Infiniband::MemoryManager::PoolAllocator::get_lock() {
 char *Infiniband::MemoryManager::PoolAllocator::malloc(const size_type block_size) {
     kassert(g_ctx);
     MemoryManager *manager = g_ctx->manager;
-    Context *context = manager->context;
-    size_t chunk_buffer_size = sizeof(Chunk) + context->m_rdma_config_->m_rdma_buffer_size_bytes_;
+    CephContext *cct = manager->cct;
+    size_t chunk_buffer_size = sizeof(Chunk) + cct->m_rdma_config_->m_rdma_buffer_size_bytes_;
     size_t chunk_buffer_number = block_size / chunk_buffer_size;
 
     if (!g_ctx->can_alloc(chunk_buffer_number)) return NULL;
@@ -853,7 +853,7 @@ char *Infiniband::MemoryManager::PoolAllocator::malloc(const size_type block_siz
     /* initialize chunks */
     Chunk *chunk = minfo->chunks;
     for (unsigned i = 0; i < chunk_buffer_number; i++) {
-        new (chunk) Chunk(minfo->mr, context->m_rdma_config_->m_rdma_buffer_size_bytes_, chunk->data, 0, 0, minfo->mr->lkey);
+        new (chunk) Chunk(minfo->mr, cct->m_rdma_config_->m_rdma_buffer_size_bytes_, chunk->data, 0, 0, minfo->mr->lkey);
         chunk = reinterpret_cast<Chunk *>(reinterpret_cast<char *>(chunk) + chunk_buffer_size);
     }
 
@@ -871,8 +871,8 @@ void Infiniband::MemoryManager::PoolAllocator::free(char *const block) {
     m->ctx->manager->free(m);
 }
 
-Infiniband::MemoryManager::MemoryManager(Context *c, Device *d, ProtectionDomain *p)
-    : context(c),
+Infiniband::MemoryManager::MemoryManager(CephContext *c, Device *d, ProtectionDomain *p)
+    : cct(c),
       device(d),
       pd(p),
       rxbuf_pool_ctx(this),
@@ -887,7 +887,7 @@ Infiniband::MemoryManager::MemoryManager(Context *c, Device *d, ProtectionDomain
                                                                       :
                                                                       // rx pool is infinite, we can set any initial size that we want
                      2 * c->m_rdma_config_->m_rdma_receive_queue_len_,
-                 device->get_device_attr()->max_mr_size / (sizeof(Chunk) + context->m_rdma_config_->m_rdma_buffer_size_bytes_)) {}
+                 device->get_device_attr()->max_mr_size / (sizeof(Chunk) + cct->m_rdma_config_->m_rdma_buffer_size_bytes_)) {}
 
 Infiniband::MemoryManager::~MemoryManager() {
     if (send_buffers) delete send_buffers;
@@ -917,14 +917,14 @@ void Infiniband::MemoryManager::huge_pages_free(void *ptr) {
 }
 
 void *Infiniband::MemoryManager::malloc(size_t size) {
-    if (context->m_rdma_config_->m_rdma_enable_hugepage_)
+    if (cct->m_rdma_config_->m_rdma_enable_hugepage_)
         return huge_pages_malloc(size);
     else
         return std::malloc(size);
 }
 
 void Infiniband::MemoryManager::free(void *ptr) {
-    if (context->m_rdma_config_->m_rdma_enable_hugepage_)
+    if (cct->m_rdma_config_->m_rdma_enable_hugepage_)
         huge_pages_free(ptr);
     else
         std::free(ptr);
@@ -945,11 +945,11 @@ int Infiniband::MemoryManager::get_send_buffers_by_num(std::vector<Chunk *> &c, 
 
 static std::atomic<bool> init_prereq = {false};
 
-void Infiniband::verify_prereq(Context *context) {
+void Infiniband::verify_prereq(CephContext *cct) {
     int rc = 0;
     std::cout << typeid(Infiniband).name() << " : " << __func__
-              << " ms_async_rdma_enable_hugepage value is: " << context->m_rdma_config_->m_rdma_enable_hugepage_ << std::endl;
-    if (context->m_rdma_config_->m_rdma_enable_hugepage_) {
+              << " ms_async_rdma_enable_hugepage value is: " << cct->m_rdma_config_->m_rdma_enable_hugepage_ << std::endl;
+    if (cct->m_rdma_config_->m_rdma_enable_hugepage_) {
         rc = setenv("RDMAV_HUGEPAGES_SAFE", "1", 1);
         std::cout << typeid(Infiniband).name() << " : " << __func__ << " RDMAV_HUGEPAGES_SAFE is set as: " << getenv("RDMAV_HUGEPAGES_SAFE")
                   << std::endl;
@@ -981,9 +981,9 @@ void Infiniband::verify_prereq(Context *context) {
     init_prereq = true;
 }
 
-Infiniband::Infiniband(Context *context)
-    : context(context), device_name(context->m_rdma_config_->m_rdma_device_name_), port_num(context->m_rdma_config_->m_rdma_port_num_) {
-    if (!init_prereq) verify_prereq(context);
+Infiniband::Infiniband(CephContext *cct)
+    : context(cct), device_name(cct->m_rdma_config_->m_rdma_device_name_), port_num(cct->m_rdma_config_->m_rdma_port_num_) {
+    if (!init_prereq) verify_prereq(cct);
     std::cout << typeid(this).name() << " : " << __func__ << " constructing Infiniband..." << std::endl;
 }
 
@@ -992,49 +992,49 @@ void Infiniband::init() {
 
     if (initialized) return;
 
-    device_list = new DeviceList(context);
+    device_list = new DeviceList(cct);
     initialized = true;
 
     device = device_list->get_device(device_name.c_str());
     kassert(device);
-    device->binding_port(context, port_num);
+    device->binding_port(cct, port_num);
     ib_physical_port = device->get_port()->get_port_num();
-    pd = new ProtectionDomain(context, device);
+    pd = new ProtectionDomain(cct, device);
     int rs = Network::NetHandler::set_nonblock(device->get_context()->async_fd);
     kassert(rs == 0);
 
-    support_srq = context->m_rdma_config_->m_rdma_support_srq_;
+    support_srq = cct->m_rdma_config_->m_rdma_support_srq_;
     if (support_srq) {
         kassert(device->get_device_attr()->max_srq);
         rx_queue_len = device->get_device_attr()->max_srq_wr;
     } else
         rx_queue_len = device->get_device_attr()->max_qp_wr;
-    if (rx_queue_len > context->m_rdma_config_->m_rdma_receive_queue_len_) {
-        rx_queue_len = context->m_rdma_config_->m_rdma_receive_queue_len_;
+    if (rx_queue_len > cct->m_rdma_config_->m_rdma_receive_queue_len_) {
+        rx_queue_len = cct->m_rdma_config_->m_rdma_receive_queue_len_;
         std::cout << typeid(this).name() << " : " << __func__ << " assigning: " << rx_queue_len << " receive buffers" << std::endl;
     } else {
         std::cout << typeid(this).name() << " : " << __func__ << " using the max allowed receive buffers: " << rx_queue_len << std::endl;
     }
 
     // check for the misconfiguration
-    if (context->m_rdma_config_->m_rdma_receive_buffers_bytes_ > 0 &&
-        rx_queue_len > (unsigned)context->m_rdma_config_->m_rdma_receive_buffers_bytes_) {
+    if (cct->m_rdma_config_->m_rdma_receive_buffers_bytes_ > 0 &&
+        rx_queue_len > (unsigned)cct->m_rdma_config_->m_rdma_receive_buffers_bytes_) {
         std::cout << typeid(this).name() << " : " << __func__ << " rdma_receive_queue_len (" << rx_queue_len << ") > m_rdma_receive_buffers_bytes_("
-                  << context->m_rdma_config_->m_rdma_receive_buffers_bytes_ << ")." << std::endl;
+                  << cct->m_rdma_config_->m_rdma_receive_buffers_bytes_ << ")." << std::endl;
         abort();
     }
 
     // Keep extra one WR for a beacon to indicate all WCEs were consumed
     tx_queue_len = device->get_device_attr()->max_qp_wr - 1;
-    if (tx_queue_len > context->m_rdma_config_->m_rdma_send_queue_len_) {
-        tx_queue_len = context->m_rdma_config_->m_rdma_send_queue_len_;
+    if (tx_queue_len > cct->m_rdma_config_->m_rdma_send_queue_len_) {
+        tx_queue_len = cct->m_rdma_config_->m_rdma_send_queue_len_;
         std::cout << typeid(this).name() << " : " << __func__ << " assigning: " << tx_queue_len << " send buffers" << std::endl;
     } else {
         std::cout << typeid(this).name() << " : " << __func__ << " using the max allowed send buffers: " << tx_queue_len << std::endl;
     }
 
     // check for the memory region size misconfiguration
-    if ((uint64_t)context->m_rdma_config_->m_rdma_buffer_size_bytes_ * tx_queue_len > device->get_device_attr()->max_mr_size) {
+    if ((uint64_t)cct->m_rdma_config_->m_rdma_buffer_size_bytes_ * tx_queue_len > device->get_device_attr()->max_mr_size) {
         std::cout << typeid(this).name() << " : " << __func__ << " Out of max memory region size " << std::endl;
         abort();
     }
@@ -1042,8 +1042,8 @@ void Infiniband::init() {
     std::cout << typeid(this).name() << " : " << __func__ << " device allow " << device->get_device_attr()->max_cqe << " completion entries"
               << std::endl;
 
-    memory_manager = new MemoryManager(context, device, pd);
-    memory_manager->create_tx_pool(context->m_rdma_config_->m_rdma_buffer_size_bytes_, 8 * tx_queue_len);
+    memory_manager = new MemoryManager(cct, device, pd);
+    memory_manager->create_tx_pool(cct->m_rdma_config_->m_rdma_buffer_size_bytes_, 8 * tx_queue_len);
 
     if (unlikely(support_srq)) {
         srq = create_shared_receive_queue(rx_queue_len, MAX_SHARED_RX_SGE_COUNT);
@@ -1091,9 +1091,9 @@ int Infiniband::get_tx_buffers(std::vector<Chunk *> &c, size_t bytes) { return m
  *      QueuePair on success or NULL if init fails
  * See QueuePair::QueuePair for parameter documentation.
  */
-Infiniband::QueuePair *Infiniband::create_queue_pair(Context *context, CompletionQueue *tx, CompletionQueue *rx, ibv_qp_type type,
+Infiniband::QueuePair *Infiniband::create_queue_pair(CephContext *cct, CompletionQueue *tx, CompletionQueue *rx, ibv_qp_type type,
                                                      struct rdma_cm_id *cm_id) {
-    Infiniband::QueuePair *qp = new QueuePair(context, *this, type, ib_physical_port, srq, tx, rx, tx_queue_len, rx_queue_len, cm_id);
+    Infiniband::QueuePair *qp = new QueuePair(cct, *this, type, ib_physical_port, srq, tx, rx, tx_queue_len, rx_queue_len, cm_id);
     if (qp->init()) {
         delete qp;
         return NULL;
@@ -1172,7 +1172,7 @@ int Infiniband::post_chunks_to_rq(int rq_wr_num, QueuePair *qp) {
     return i;
 }
 
-Infiniband::CompletionChannel *Infiniband::create_comp_channel(Context *c) {
+Infiniband::CompletionChannel *Infiniband::create_comp_channel(CephContext *c) {
     Infiniband::CompletionChannel *cc = new Infiniband::CompletionChannel(c, *this);
     if (cc->init()) {
         delete cc;
@@ -1181,7 +1181,7 @@ Infiniband::CompletionChannel *Infiniband::create_comp_channel(Context *c) {
     return cc;
 }
 
-Infiniband::CompletionQueue *Infiniband::create_comp_queue(Context *context, CompletionChannel *cc) {
+Infiniband::CompletionQueue *Infiniband::create_comp_queue(CephContext *cct, CompletionChannel *cc) {
     Infiniband::CompletionQueue *cq = new Infiniband::CompletionQueue(context, *this, CQ_DEPTH, cc);
     if (cq->init()) {
         delete cq;

@@ -47,9 +47,9 @@ class C_handle_connection_read : public EventCallback {
 #undef dout_prefix
 #define dout_prefix *_dout << " RDMAConnectedSocketImpl "
 
-RDMAConnectedSocketImpl::RDMAConnectedSocketImpl(Context *context, std::shared_ptr<Infiniband> &ib, std::shared_ptr<RDMADispatcher> &rdma_dispatcher,
+RDMAConnectedSocketImpl::RDMAConnectedSocketImpl(CephContext *cct, std::shared_ptr<Infiniband> &ib, std::shared_ptr<RDMADispatcher> &rdma_dispatcher,
                                                  RDMAWorker *w)
-    : context(context),
+    : cct(cct),
       connected(0),
       error(0),
       ib(ib),
@@ -60,8 +60,8 @@ RDMAConnectedSocketImpl::RDMAConnectedSocketImpl(Context *context, std::shared_p
       established_handler(new C_handle_connection_established(this)),
       active(false),
       pending(false) {
-    if (!context->m_rdma_config_->m_use_rdma_cm_) {
-        qp = ib->create_queue_pair(context, dispatcher->get_tx_cq(), dispatcher->get_rx_cq(), IBV_QPT_RC, NULL);
+    if (!cct->m_rdma_config_->m_use_rdma_cm_) {
+        qp = ib->create_queue_pair(cct, dispatcher->get_tx_cq(), dispatcher->get_rx_cq(), IBV_QPT_RC, NULL);
         if (!qp) {
             std::cout << typeid(this).name() << " : " << __func__ << " queue pair create failed" << std::endl;
             return;
@@ -132,9 +132,9 @@ int RDMAConnectedSocketImpl::try_connect(const entity_addr_t &peer_addr, const S
     // we construct a socket to transport ib sync message
     // but we shouldn't block in tcp connecting
     if (opts.nonblock) {
-        tcp_fd = Network::NetHandler::nonblock_connect(context, peer_addr, opts.connect_bind_addr);
+        tcp_fd = Network::NetHandler::nonblock_connect(cct, peer_addr, opts.connect_bind_addr);
     } else {
-        tcp_fd = Network::NetHandler::connect(context, peer_addr, opts.connect_bind_addr);
+        tcp_fd = Network::NetHandler::connect(cct, peer_addr, opts.connect_bind_addr);
     }
 
     if (tcp_fd < 0) {
@@ -173,7 +173,7 @@ int RDMAConnectedSocketImpl::handle_connection_established(bool need_set_fault) 
     }
     // send handshake msg to server
     qp->get_local_cm_meta().peer_qpn = 0;
-    int r = qp->send_cm_meta(context, tcp_fd);
+    int r = qp->send_cm_meta(cct, tcp_fd);
     if (r < 0) {
         std::cout << typeid(this).name() << " : " << __func__ << " send handshake msg failed." << r << std::endl;
         if (need_set_fault) {
@@ -189,7 +189,7 @@ int RDMAConnectedSocketImpl::handle_connection_established(bool need_set_fault) 
 void RDMAConnectedSocketImpl::handle_connection() {
     std::cout << typeid(this).name() << " : " << __func__ << " QP: " << local_qpn << " tcp_fd: " << tcp_fd << " notify_fd: " << notify_fd
               << std::endl;
-    int r = qp->recv_cm_meta(context, tcp_fd);
+    int r = qp->recv_cm_meta(cct, tcp_fd);
     if (r <= 0) {
         if (r != -EAGAIN) {
             dispatcher->perf_logger->inc(l_msgr_rdma_handshake_errors);
@@ -211,7 +211,7 @@ void RDMAConnectedSocketImpl::handle_connection() {
             kassert(!r);
         }
         notify();
-        r = qp->send_cm_meta(context, tcp_fd);
+        r = qp->send_cm_meta(cct, tcp_fd);
         if (r < 0) {
             std::cout << typeid(this).name() << " : " << __func__ << " send client ack failed." << std::endl;
             dispatcher->perf_logger->inc(l_msgr_rdma_handshake_errors);
@@ -225,7 +225,7 @@ void RDMAConnectedSocketImpl::handle_connection() {
             }
             r = activate();
             kassert(!r);
-            r = qp->send_cm_meta(context, tcp_fd);
+            r = qp->send_cm_meta(cct, tcp_fd);
             if (r < 0) {
                 std::cout << typeid(this).name() << " : " << __func__ << " server ack failed." << std::endl;
                 dispatcher->perf_logger->inc(l_msgr_rdma_handshake_errors);

@@ -55,7 +55,7 @@ class RDMAStack;
 
 class Port {
    public:
-    explicit Port(Context *context, struct ibv_context *ictxt, uint8_t ipn);
+    explicit Port(CephContext *cct, struct ibv_context *ictxt, uint8_t ipn);
     uint16_t get_lid() { return lid; }
     ibv_gid get_gid() { return gid; }
     int get_port_num() { return port_num; }
@@ -73,8 +73,8 @@ class Port {
 
 class Device {
    public:
-    explicit Device(Context *c, ibv_device *ib_dev);
-    explicit Device(Context *c, ibv_context *ib_ctx);
+    explicit Device(CephContext *c, ibv_device *ib_dev);
+    explicit Device(CephContext *c, ibv_context *ib_ctx);
     ~Device() {
         if (active_port) {
             delete active_port;
@@ -85,7 +85,7 @@ class Device {
     uint16_t get_lid() { return active_port->get_lid(); }
     ibv_gid get_gid() { return active_port->get_gid(); }
     int get_gid_idx() { return active_port->get_gid_idx(); }
-    void binding_port(Context *c, int port_num);
+    void binding_port(CephContext *c, int port_num);
     struct ibv_context *get_context() {
         return ctxt;
     };
@@ -112,21 +112,23 @@ class DeviceList {
     Device **devices;
 
    public:
-    explicit DeviceList(Context *context) : device_list(nullptr), device_context_list(nullptr), num(0), devices(nullptr) {
+    explicit DeviceList(CephContext *cct) : device_list(nullptr), device_context_list(nullptr), num(0), devices(nullptr) {
         device_list = ibv_get_device_list(&num);
         kassert(device_list);
         kassert(num);
-        if (context->m_rdma_config_->m_use_rdma_cm_) {
+        //if (cct->m_rdma_config_->m_use_rdma_cm_)
+        if(false) {
             device_context_list = rdma_get_devices(NULL);
             kassert(device_context_list);
         }
         devices = new Device *[num];
 
         for (int i = 0; i < num; ++i) {
-            if (context->m_rdma_config_->m_use_rdma_cm_) {
-                devices[i] = new Device(context, device_context_list[i]);
+            //if (context->m_rdma_config_->m_use_rdma_cm_)
+            if(false) {
+                devices[i] = new Device(cct, device_context_list[i]);
             } else {
-                devices[i] = new Device(context, device_list[i]);
+                devices[i] = new Device(cct, device_list[i]);
             }
         }
     }
@@ -200,7 +202,7 @@ class Infiniband {
    public:
     class ProtectionDomain {
        public:
-        explicit ProtectionDomain(Context *context, Device *device);
+        explicit ProtectionDomain(CephContext *cct, Device *device);
         ~ProtectionDomain();
 
         ibv_pd *const pd;
@@ -341,7 +343,7 @@ class Infiniband {
             }
         };
 
-        MemoryManager(Context *c, Device *d, ProtectionDomain *p);
+        MemoryManager(CephContext *c, Device *d, ProtectionDomain *p);
         ~MemoryManager();
 
         void create_tx_pool(uint32_t size, uint32_t tx_num);
@@ -366,7 +368,7 @@ class Infiniband {
 
         void set_rx_stat_logger(PerfCounters *logger) { rxbuf_pool_ctx.set_stat_logger(logger); }
 
-        Context *context;
+        CephContext *cct;
 
         Cluster *send_buffers = nullptr;  // SEND
        private:
@@ -395,7 +397,7 @@ class Infiniband {
     Device *device = NULL;
     ProtectionDomain *pd = NULL;
     DeviceList *device_list = nullptr;
-    Context *context;
+    CephContext *cct;
     std::mutex lock;
     bool initialized = false;
     const std::string &device_name;
@@ -403,21 +405,21 @@ class Infiniband {
     bool support_srq = false;
 
    public:
-    explicit Infiniband(Context *c);
+    explicit Infiniband(CephContext *c);
     ~Infiniband();
     void init();
-    static void verify_prereq(Context *context);
+    static void verify_prereq(CephContext *cct);
 
     class CompletionChannel {
         static const uint32_t MAX_ACK_EVENT = 5000;
-        Context *context;
+        CephContext *cct;
         Infiniband &infiniband;
         ibv_comp_channel *channel;
         ibv_cq *cq;
         uint32_t cq_events_that_need_ack;
 
        public:
-        CompletionChannel(Context *c, Infiniband &ib);
+        CompletionChannel(CephContext *c, Infiniband &ib);
         ~CompletionChannel();
         int init();
         bool get_cq_event();
@@ -433,8 +435,8 @@ class Infiniband {
     // You need to call init and it will create a cq and associate to comp channel
     class CompletionQueue {
        public:
-        CompletionQueue(Context *c, Infiniband &ib, const uint32_t qd, CompletionChannel *cc)
-            : context(c), infiniband(ib), channel(cc), cq(NULL), queue_depth(qd) {}
+        CompletionQueue(CephContext *c, Infiniband &ib, const uint32_t qd, CompletionChannel *cc)
+            : cct(c), infiniband(ib), channel(cc), cq(NULL), queue_depth(qd) {}
         ~CompletionQueue();
         int init();
         int poll_cq(int num_entries, ibv_wc *ret_wc_array);
@@ -444,7 +446,7 @@ class Infiniband {
         CompletionChannel *get_cc() const { return channel; }
 
        private:
-        Context *context;
+        CephContext *cct;
         Infiniband &infiniband;  // Infiniband to which this QP belongs
         CompletionChannel *channel;
         ibv_cq *cq;
@@ -460,7 +462,7 @@ class Infiniband {
     class QueuePair {
        public:
         typedef MemoryManager::Chunk Chunk;
-        QueuePair(Context *c, Infiniband &infiniband, ibv_qp_type type, int ib_physical_port, ibv_srq *srq, Infiniband::CompletionQueue *txcq,
+        QueuePair(CephContext *c, Infiniband &infiniband, ibv_qp_type type, int ib_physical_port, ibv_srq *srq, Infiniband::CompletionQueue *txcq,
                   Infiniband::CompletionQueue *rxcq, uint32_t tx_queue_len, uint32_t max_recv_wr, rdma_cm_id *cid, uint32_t q_key = 0);
         ~QueuePair();
 
@@ -499,8 +501,8 @@ class Infiniband {
         /*
          * send/receive connection management meta data
          */
-        int send_cm_meta(Context *context, int socket_fd);
-        int recv_cm_meta(Context *context, int socket_fd);
+        int send_cm_meta(CephContext *cct, int socket_fd);
+        int recv_cm_meta(CephContext *cct, int socket_fd);
         static void wire_gid_to_gid(const char *wgid, ib_cm_meta_t *cm_meta_data);
         void gid_to_wire_gid(const ib_cm_meta_t &cm_meta_data, char wgid[]);
         ibv_qp *get_qp() const { return qp; }
@@ -528,7 +530,7 @@ class Infiniband {
         ibv_srq *get_srq() const { return srq; }
 
        private:
-        Context *context;
+        CephContext *cct;
         Infiniband &infiniband;  // Infiniband to which this QP belongs
         ibv_qp_type type;        // QP type (IBV_QPT_RC, etc.)
         ibv_context *ctxt;       // device context of the HCA to use
@@ -557,7 +559,7 @@ class Infiniband {
    public:
     typedef MemoryManager::Cluster Cluster;
     typedef MemoryManager::Chunk Chunk;
-    QueuePair *create_queue_pair(Context *c, CompletionQueue *tx, CompletionQueue *rx, ibv_qp_type type, struct rdma_cm_id *cm_id);
+    QueuePair *create_queue_pair(CephContext *c, CompletionQueue *tx, CompletionQueue *rx, ibv_qp_type type, struct rdma_cm_id *cm_id);
     ibv_srq *create_shared_receive_queue(uint32_t max_wr, uint32_t max_sge);
     // post rx buffers to srq, return number of buffers actually posted
     int post_chunks_to_rq(int num, QueuePair *qp = nullptr);
@@ -569,8 +571,8 @@ class Infiniband {
         get_memory_manager()->release_rx_buffer(chunk);
     }
     int get_tx_buffers(std::vector<Chunk *> &c, size_t bytes);
-    CompletionChannel *create_comp_channel(Context *c);
-    CompletionQueue *create_comp_queue(Context *c, CompletionChannel *cc = NULL);
+    CompletionChannel *create_comp_channel(CephContext *c);
+    CompletionQueue *create_comp_queue(CephContext *c, CompletionChannel *cc = NULL);
     uint8_t get_ib_physical_port() { return ib_physical_port; }
     uint16_t get_lid() { return device->get_lid(); }
     ibv_gid get_gid() { return device->get_gid(); }

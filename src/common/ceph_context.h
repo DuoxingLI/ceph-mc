@@ -48,6 +48,13 @@ class CryptoHandler;
 class CryptoRandom;
 class MonMap;
 
+struct MulticastConnectGroup {
+    uint32_t ip_addr_member_1;
+    uint16_t port_member_1;
+    uint32_t ip_addr_member_2;
+    uint16_t port_member_2;
+};
+
 namespace ceph::common {
   class CephContextServiceThread;
   class CephContextObs;
@@ -158,6 +165,8 @@ public:
   ceph::HeartbeatMap *get_heartbeat_map() {
     return _heartbeat_map;
   }
+
+
 
   /**
    * Get the admin socket associated with this CephContext.
@@ -388,6 +397,30 @@ private:
   void _refresh_perf_values();
 
   friend class CephContextObs;
+
+public:
+  void set_MulticastConnectGroup(const entity_addrvec_t& addrs1,const entity_addrvec_t& addrs2){
+    m_mc_group.ip_addr_member_1 = 0;
+    m_mc_group.port_member_1 = 0;
+    m_mc_group.ip_addr_member_2 = 0;
+    m_mc_group.port_member_2 = 0;
+  }
+  uint32_t get_mc_ip_1(){
+    return m_mc_group.ip_addr_member_1;
+  }
+  uint32_t get_mc_ip_2(){
+    return m_mc_group.ip_addr_member_2;
+  }
+  uint32_t get_mc_port_1(){
+    return m_mc_group.port_member_1;
+  }
+  uint32_t get_mc_port_2(){
+    return m_mc_group.port_member_2;
+  }
+private:
+  
+  MulticastConnectGroup m_mc_group;
+
 };
 #ifdef __cplusplus
 }
