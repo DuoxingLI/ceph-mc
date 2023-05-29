@@ -151,6 +151,7 @@ public:
   ConnectionRef connect_to(int type,
 			   const entity_addrvec_t& addrs,
 			   bool anon, bool not_local_dest=false) override;
+
   ConnectionRef connect_to_multi(int type,
 			   const entity_addrvec_t& addrs_1, const entity_addrvec_t& addrs_2, 
 			   bool anon, bool not_local_dest=false) override;
@@ -206,10 +207,13 @@ private:
   AsyncConnectionRef create_connect(const entity_addrvec_t& addrs, int type,
 				    bool anon);
 
+  AsyncConnectionRef create_multi_connect(const entity_addrvec_t& mc_daemon_addrs,
+            const entity_addrvec_t& addrs1,const entity_addrvec_t& addrs2, int type, bool anon);
+
   entity_addrvec_t mc_daemon_addrs;
 
 
-  ceph::unordered_map<pair<entity_addrvec_t,entity_addrvec_t>,AsyncConnectionRef> multi_conns;
+  ceph::unordered_map<entity_addrvec_t,AsyncConnectionRef> multi_conns;
 
 
   void _finish_bind(const entity_addrvec_t& bind_addrs,
@@ -327,19 +331,24 @@ private:
     return p->second;
   }
 
-  pair<entity_addrvec_t,entity_addrvec_t> make_sorted_pair(const entity_addrvec_t& k1,const entity_addrvec_t& k2) {
-    if (k1<k2) {
-      make_pair(k2,k1);
-    }
+  entity_addrvec_t make_sorted_pair_key(const entity_addrvec_t& k1,const entity_addrvec_t& k2) {
+    entity_addrvec_t multi_addrs;
+    // entity_addrvec_t a2=k2.v[0];
+    // if (k1<k2) {
+    //   return hash<entity_addrvec_t>(k1)+hash<entity_addrvec_t>(k2);
+    // }
+    multi_addrs.add_addr(k1);
+    multi_addrs.add_addr(k2);
 
-    return make_pair(k1,k2);
+    return multi_addrs;
+    // return hash<entity_addrvec_t>(k1)+hash<entity_addrvec_t>(k2);
   }
 
   const auto& _lookup_multi_conn(const entity_addrvec_t& k1,const entity_addrvec_t& k2) {
     static const AsyncConnectionRef nullref;
     ceph_assert(ceph_mutex_is_locked(lock));
     // k1, k2 sorted before
-    auto p = multi_conns.find(make_sorted_pair(k1,k2));
+    auto p = multi_conns.find(make_sorted_pair_key(k1,k2));
     if (p == multi_conns.end()) {
       return nullref;
     }

@@ -19,6 +19,8 @@
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/time.h>
+#include "common/errno.h"
+#include "common/debug.h"
 
 #include "RDMAStack.h"
 
@@ -29,7 +31,7 @@ static const uint32_t MAX_SHARED_RX_SGE_COUNT = 1;
 static const uint32_t MAX_INLINE_DATA = 0;
 static const uint32_t CQ_DEPTH = 30000;
 
-Port::Port(CephContext *cct, struct ibv_context *ictxt, uint8_t ipn) : ctxt(ictxt), port_num(ipn), gid_idx(cct->m_rdma_config_->m_gid_index_) {
+Port::Port(CephContext *cct, struct ibv_context *ictxt, uint8_t ipn) : ctxt(ictxt), port_num(ipn), gid_idx(cct->_conf.get_val<int64_t>("ms_async_rdma_gid_idx")) {
     int r = ibv_query_port(ctxt, port_num, &port_attr);
     if (r == -1) {
         std::cout << typeid(this).name() << " : " << __func__ << " query port failed  " << cpp_strerror(errno) << std::endl;
@@ -46,9 +48,9 @@ Port::Port(CephContext *cct, struct ibv_context *ictxt, uint8_t ipn) : ctxt(ictx
     std::cout << typeid(this).name() << " : " << __func__ << " using experimental verbs for gid" << std::endl;
 
     // search for requested GID in GIDs table
-    std::cout << typeid(this).name() << " : " << __func__ << " looking for local GID " << (context->m_rdma_config_->ms_async_rdma_local_gid)
-              << " of type " << (context->m_rdma_config_->ms_async_rdma_roce_ver) << std::endl;
-    r = sscanf(context->m_rdma_config_->ms_async_rdma_local_gid.c_str(),
+    std::cout << typeid(this).name() << " : " << __func__ << " looking for local GID " << (cct->_conf->ms_async_rdma_local_gid)
+              << " of type " << (cct->_conf->ms_async_rdma_roce_ver) << std::endl;
+    r = sscanf(cct->_conf->ms_async_rdma_local_gid.c_str(),
                "%02hhx%02hhx:%02hhx%02hhx:%02hhx%02hhx:%02hhx%02hhx"
                ":%02hhx%02hhx:%02hhx%02hhx:%02hhx%02hhx:%02hhx%02hhx",
                &cgid.raw[0], &cgid.raw[1], &cgid.raw[2], &cgid.raw[3], &cgid.raw[4], &cgid.raw[5], &cgid.raw[6], &cgid.raw[7], &cgid.raw[8],
@@ -76,7 +78,7 @@ Port::Port(CephContext *cct, struct ibv_context *ictxt, uint8_t ipn) : ctxt(ictx
         }
 
         if (malformed) break;  // stay with gid_idx=0
-        if ((gid_attr.type == context->m_rdma_config_->ms_async_rdma_roce_ver) && (memcmp(&gid, &cgid, 16) == 0)) {
+        if ((gid_attr.type == cct->_conf->ms_async_rdma_roce_ver) && (memcmp(&gid, &cgid, 16) == 0)) {
             std::cout << typeid(this).name() << " : " << __func__ << " found at index " << gid_idx << std::endl;
             break;
         }
@@ -234,11 +236,11 @@ int Infiniband::QueuePair::modify_qp_to_rtr(void) {
     qpa.ah_attr.grh.hop_limit = 6;
     qpa.ah_attr.grh.dgid = peer_cm_meta.gid;
     qpa.ah_attr.grh.sgid_index = infiniband.get_device()->get_gid_idx();
-    qpa.ah_attr.grh.traffic_class = cct->m_rdma_config_->m_rdma_dscp_;
+    qpa.ah_attr.grh.traffic_class = cct->_conf->ms_async_rdma_dscp;
     // qpa.ah_attr.grh.flow_label = 0;
 
     qpa.ah_attr.dlid = peer_cm_meta.lid;
-    qpa.ah_attr.sl = cct->m_rdma_config_->m_rdma_sl_;
+    qpa.ah_attr.sl = cct->_conf->ms_async_rdma_sl;
     qpa.ah_attr.src_path_bits = 0;
     qpa.ah_attr.port_num = (uint8_t)(ib_physical_port);
 
@@ -311,7 +313,7 @@ int Infiniband::QueuePair::init() {
     qpia.qp_type = type;                         // RC, UC, UD, or XRC
     qpia.sq_sig_all = 0;                         // only generate CQEs on requested WQEs
 
-    if (!cct->m_rdma_config_->m_use_rdma_cm_) {
+    if (!cct->_conf->m_use_rdma_cm) {
         qp = ibv_create_qp(pd, &qpia);
         if (qp == NULL) {
             std::cout << typeid(this).name() << " : " << __func__ << " failed to create queue pair" << cpp_strerror(errno) << std::endl;
@@ -774,11 +776,11 @@ int Infiniband::MemoryManager::Cluster::get_buffers(std::vector<Chunk *> &chunks
 
 bool Infiniband::MemoryManager::MemPoolContext::can_alloc(unsigned nbufs) {
     /* unlimited */
-    if (manager->cct->m_rdma_config_->m_rdma_receive_buffers_bytes_ <= 0) return true;
+    if (manager->cct->_conf->ms_async_rdma_receive_buffers <= 0) return true;
     //how to config RDMA?
-    if (n_bufs_allocated + nbufs > (unsigned)manager->cct->m_rdma_config_->m_rdma_receive_buffers_bytes_) {
+    if (n_bufs_allocated + nbufs > (unsigned)manager->cct->_conf->ms_async_rdma_receive_buffers) {
         std::cout << typeid(this).name() << " : " << __func__ << " WARNING: OUT OF RX BUFFERS: allocated: " << n_bufs_allocated
-                  << " requested: " << nbufs << " limit: " << manager->cct->m_rdma_config_->m_rdma_receive_buffers_bytes_ << std::endl;
+                  << " requested: " << nbufs << " limit: " << manager->cct->_conf->ms_async_rdma_receive_buffers << std::endl;
         return false;
     }
 
@@ -819,7 +821,7 @@ char *Infiniband::MemoryManager::PoolAllocator::malloc(const size_type block_siz
     kassert(g_ctx);
     MemoryManager *manager = g_ctx->manager;
     CephContext *cct = manager->cct;
-    size_t chunk_buffer_size = sizeof(Chunk) + cct->m_rdma_config_->m_rdma_buffer_size_bytes_;
+    size_t chunk_buffer_size = sizeof(Chunk) + cct->_conf->ms_async_rdma_buffer_size;
     size_t chunk_buffer_number = block_size / chunk_buffer_size;
 
     if (!g_ctx->can_alloc(chunk_buffer_number)) return NULL;
@@ -853,7 +855,7 @@ char *Infiniband::MemoryManager::PoolAllocator::malloc(const size_type block_siz
     /* initialize chunks */
     Chunk *chunk = minfo->chunks;
     for (unsigned i = 0; i < chunk_buffer_number; i++) {
-        new (chunk) Chunk(minfo->mr, cct->m_rdma_config_->m_rdma_buffer_size_bytes_, chunk->data, 0, 0, minfo->mr->lkey);
+        new (chunk) Chunk(minfo->mr, cct->_conf->ms_async_rdma_buffer_size, chunk->data, 0, 0, minfo->mr->lkey);
         chunk = reinterpret_cast<Chunk *>(reinterpret_cast<char *>(chunk) + chunk_buffer_size);
     }
 
@@ -876,18 +878,18 @@ Infiniband::MemoryManager::MemoryManager(CephContext *c, Device *d, ProtectionDo
       device(d),
       pd(p),
       rxbuf_pool_ctx(this),
-      rxbuf_pool(&rxbuf_pool_ctx, sizeof(Chunk) + c->m_rdma_config_->m_rdma_buffer_size_bytes_,
-                 c->m_rdma_config_->m_rdma_receive_buffers_bytes_ > 0 ?
+      rxbuf_pool(&rxbuf_pool_ctx, sizeof(Chunk) + c->_conf->ms_async_rdma_buffer_size,
+                 c->_conf->ms_async_rdma_receive_buffers > 0 ?
                                                                       // if possible make initial pool size 2 * receive_queue_len
                                                                       // that way there will be no pool expansion upon receive of the
                                                                       // first packet.
-                     (c->m_rdma_config_->m_rdma_receive_buffers_bytes_ < 2 * c->m_rdma_config_->m_rdma_receive_queue_len_
-                          ? c->m_rdma_config_->m_rdma_receive_buffers_bytes_
-                          : 2 * c->m_rdma_config_->m_rdma_receive_queue_len_)
+                     (c->_conf->ms_async_rdma_receive_buffers < 2 * c->_conf->ms_async_rdma_receive_queue_len
+                          ? c->_conf->ms_async_rdma_receive_buffers
+                          : 2 * c->_conf->ms_async_rdma_receive_queue_len)
                                                                       :
                                                                       // rx pool is infinite, we can set any initial size that we want
-                     2 * c->m_rdma_config_->m_rdma_receive_queue_len_,
-                 device->get_device_attr()->max_mr_size / (sizeof(Chunk) + cct->m_rdma_config_->m_rdma_buffer_size_bytes_)) {}
+                     2 * c->_conf->ms_async_rdma_receive_queue_len,
+                 device->get_device_attr()->max_mr_size / (sizeof(Chunk) + cct->_conf->ms_async_rdma_buffer_size)) {}
 
 Infiniband::MemoryManager::~MemoryManager() {
     if (send_buffers) delete send_buffers;
@@ -917,14 +919,14 @@ void Infiniband::MemoryManager::huge_pages_free(void *ptr) {
 }
 
 void *Infiniband::MemoryManager::malloc(size_t size) {
-    if (cct->m_rdma_config_->m_rdma_enable_hugepage_)
+    if (cct->_conf->ms_async_rdma_enable_hugepage)
         return huge_pages_malloc(size);
     else
         return std::malloc(size);
 }
 
 void Infiniband::MemoryManager::free(void *ptr) {
-    if (cct->m_rdma_config_->m_rdma_enable_hugepage_)
+    if (cct->_conf->ms_async_rdma_enable_hugepage)
         huge_pages_free(ptr);
     else
         std::free(ptr);
@@ -948,8 +950,8 @@ static std::atomic<bool> init_prereq = {false};
 void Infiniband::verify_prereq(CephContext *cct) {
     int rc = 0;
     std::cout << typeid(Infiniband).name() << " : " << __func__
-              << " ms_async_rdma_enable_hugepage value is: " << cct->m_rdma_config_->m_rdma_enable_hugepage_ << std::endl;
-    if (cct->m_rdma_config_->m_rdma_enable_hugepage_) {
+              << " ms_async_rdma_enable_hugepage value is: " << cct->_conf->ms_async_rdma_enable_hugepage << std::endl;
+    if (cct->_conf->ms_async_rdma_enable_hugepage) {
         rc = setenv("RDMAV_HUGEPAGES_SAFE", "1", 1);
         std::cout << typeid(Infiniband).name() << " : " << __func__ << " RDMAV_HUGEPAGES_SAFE is set as: " << getenv("RDMAV_HUGEPAGES_SAFE")
                   << std::endl;
@@ -982,7 +984,7 @@ void Infiniband::verify_prereq(CephContext *cct) {
 }
 
 Infiniband::Infiniband(CephContext *cct)
-    : context(cct), device_name(cct->m_rdma_config_->m_rdma_device_name_), port_num(cct->m_rdma_config_->m_rdma_port_num_) {
+    : context(cct), device_name(cct->_conf->ms_async_rdma_device_name), port_num(cct->_conf->ms_async_rdma_port_num) {
     if (!init_prereq) verify_prereq(cct);
     std::cout << typeid(this).name() << " : " << __func__ << " constructing Infiniband..." << std::endl;
 }
@@ -1003,38 +1005,38 @@ void Infiniband::init() {
     int rs = Network::NetHandler::set_nonblock(device->get_context()->async_fd);
     kassert(rs == 0);
 
-    support_srq = cct->m_rdma_config_->m_rdma_support_srq_;
+    support_srq = cct->_conf->ms_async_rdma_support_srq;
     if (support_srq) {
         kassert(device->get_device_attr()->max_srq);
         rx_queue_len = device->get_device_attr()->max_srq_wr;
     } else
         rx_queue_len = device->get_device_attr()->max_qp_wr;
-    if (rx_queue_len > cct->m_rdma_config_->m_rdma_receive_queue_len_) {
-        rx_queue_len = cct->m_rdma_config_->m_rdma_receive_queue_len_;
+    if (rx_queue_len > cct->_conf->ms_async_rdma_receive_queue_len) {
+        rx_queue_len = cct->_conf->ms_async_rdma_receive_queue_len;
         std::cout << typeid(this).name() << " : " << __func__ << " assigning: " << rx_queue_len << " receive buffers" << std::endl;
     } else {
         std::cout << typeid(this).name() << " : " << __func__ << " using the max allowed receive buffers: " << rx_queue_len << std::endl;
     }
 
     // check for the misconfiguration
-    if (cct->m_rdma_config_->m_rdma_receive_buffers_bytes_ > 0 &&
-        rx_queue_len > (unsigned)cct->m_rdma_config_->m_rdma_receive_buffers_bytes_) {
+    if (cct->_conf->ms_async_rdma_receive_buffers > 0 &&
+        rx_queue_len > (unsigned)cct->_conf->ms_async_rdma_receive_buffers) {
         std::cout << typeid(this).name() << " : " << __func__ << " rdma_receive_queue_len (" << rx_queue_len << ") > m_rdma_receive_buffers_bytes_("
-                  << cct->m_rdma_config_->m_rdma_receive_buffers_bytes_ << ")." << std::endl;
+                  << cct->_conf->ms_async_rdma_receive_buffers << ")." << std::endl;
         abort();
     }
 
     // Keep extra one WR for a beacon to indicate all WCEs were consumed
     tx_queue_len = device->get_device_attr()->max_qp_wr - 1;
-    if (tx_queue_len > cct->m_rdma_config_->m_rdma_send_queue_len_) {
-        tx_queue_len = cct->m_rdma_config_->m_rdma_send_queue_len_;
+    if (tx_queue_len > cct->_conf->ms_async_rdma_send_buffers) {
+        tx_queue_len = cct->_conf->ms_async_rdma_send_buffers;
         std::cout << typeid(this).name() << " : " << __func__ << " assigning: " << tx_queue_len << " send buffers" << std::endl;
     } else {
         std::cout << typeid(this).name() << " : " << __func__ << " using the max allowed send buffers: " << tx_queue_len << std::endl;
     }
 
     // check for the memory region size misconfiguration
-    if ((uint64_t)cct->m_rdma_config_->m_rdma_buffer_size_bytes_ * tx_queue_len > device->get_device_attr()->max_mr_size) {
+    if ((uint64_t)cct->_conf->ms_async_rdma_buffer_size * tx_queue_len > device->get_device_attr()->max_mr_size) {
         std::cout << typeid(this).name() << " : " << __func__ << " Out of max memory region size " << std::endl;
         abort();
     }
@@ -1043,7 +1045,7 @@ void Infiniband::init() {
               << std::endl;
 
     memory_manager = new MemoryManager(cct, device, pd);
-    memory_manager->create_tx_pool(cct->m_rdma_config_->m_rdma_buffer_size_bytes_, 8 * tx_queue_len);
+    memory_manager->create_tx_pool(cct->_conf->ms_async_rdma_buffer_size, tx_queue_len);
 
     if (unlikely(support_srq)) {
         srq = create_shared_receive_queue(rx_queue_len, MAX_SHARED_RX_SGE_COUNT);

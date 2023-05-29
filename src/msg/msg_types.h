@@ -565,10 +565,18 @@ struct entity_addrvec_t {
   std::vector<entity_addr_t> v;
 
   entity_addrvec_t() {}
+  entity_addrvec_t(const entity_addrvec_t& a) {
+    v = a.v;
+  }
   explicit entity_addrvec_t(const entity_addr_t& a) : v({ a }) {}
 
   unsigned size() const { return v.size(); }
   bool empty() const { return v.empty(); }
+
+  bool add_addr(const entity_addrvec_t& a) {
+    v.push_back(a.v[0]);
+    return true;
+  }
 
   entity_addr_t legacy_addr() const {
     for (auto& a : v) {
@@ -720,6 +728,20 @@ template<> struct hash<entity_addrvec_t> {
     static blobhash H;
     size_t r = 0;
     for (auto& i : x.v) {
+      r += H((const char*)&i, sizeof(i));
+    }
+    return r;
+  }
+};
+
+template<> struct hash<pair<entity_addrvec_t,entity_addrvec_t>> {
+  size_t operator()( const pair<entity_addrvec_t,entity_addrvec_t>& x) const {
+    static blobhash H;
+    size_t r = 0;
+    for (auto& i : x.first.v) {
+      r += H((const char*)&i, sizeof(i));
+    }
+    for (auto& i : x.second.v) {
       r += H((const char*)&i, sizeof(i));
     }
     return r;

@@ -22,9 +22,13 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-#include "common/common_time.h"
-#include "common/perf_counters.h"
-#include "common/statistic.h"
+#include "include/str_list.h"
+#include "include/compat.h"
+#include "common/Cycles.h"
+#include "common/deleter.h"
+#include "common/Tub.h"
+#include "RDMAStack.h"
+
 Logger clientLogger;
 static const uint32_t MAX_RECORD_TIME = 5e3;
 LockedOriginalLoggerTerm<TimeRecords, TimeRecordTerm> clientTimeRecords("RequestTimeRecord", MAX_RECORD_TIME, &clientLogger);
@@ -656,7 +660,7 @@ RDMAWorker::~RDMAWorker() { delete tx_handler; }
 
 void RDMAWorker::initialize() { kassert(dispatcher); }
 
-int RDMAWorker::listen(entity_addr_t &sa, const SocketOptions &opt, ServerSocket *sock) {
+int RDMAWorker::listen(entity_addr_t &sa, unsigned addr_slot, const SocketOptions &opt, ServerSocket *sock) {
     ib->init();
     dispatcher->polling_start();
 

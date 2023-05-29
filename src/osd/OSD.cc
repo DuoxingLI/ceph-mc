@@ -1048,8 +1048,8 @@ void OSDService::send_message_multi_osd_cluster(int peer_1, int peer_2, Message 
   // service map is always newer/newest
   ceph_assert(from_epoch <= next_map->get_epoch());
 
-  if (next_map->is_down(peer) ||
-      next_map->get_info(peer).up_from > from_epoch) {
+  if (next_map->is_down(peer_1) ||
+      next_map->get_info(peer_1).up_from > from_epoch) {
     m->put();
     release_map(next_map);
     return;

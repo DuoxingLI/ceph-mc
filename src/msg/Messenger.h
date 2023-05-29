@@ -535,6 +535,11 @@ public:
   virtual ConnectionRef connect_to(
     int type, const entity_addrvec_t& dest,
     bool anon=false, bool not_local_dest=false) = 0;
+
+  virtual ConnectionRef connect_to_multi(int type,
+					 const entity_addrvec_t& addrs_1, const entity_addrvec_t& addrs_2, 
+					 bool anon, bool not_local_dest);
+
   ConnectionRef connect_to_mon(const entity_addrvec_t& dest,
       bool anon=false, bool not_local_dest=false) {
 	return connect_to(CEPH_ENTITY_TYPE_MON, dest, anon, not_local_dest);

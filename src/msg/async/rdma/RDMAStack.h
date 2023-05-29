@@ -23,9 +23,11 @@
 #include <unordered_map>
 #include <vector>
 
+#include "common/ceph_context.h"
+#include "common/debug.h"
+#include "common/errno.h"
+#include "msg/async/Stack.h"
 #include "Infiniband.h"
-#include "common/types.h"
-#include "network/Stack.h"
 
 class RDMAConnectedSocketImpl;
 class RDMAServerSocketImpl;
@@ -37,7 +39,7 @@ class RDMADispatcher {
     typedef Infiniband::QueuePair QueuePair;
 
     std::thread t;
-    CephContext *cct
+    CephContext *cct;
     std::shared_ptr<Infiniband> ib;
     Infiniband::CompletionQueue *tx_cq = nullptr;
     Infiniband::CompletionQueue *rx_cq = nullptr;
@@ -135,7 +137,7 @@ class RDMAWorker : public Worker {
     PerfCounters *perf_logger;
     explicit RDMAWorker(CephContext *cct, unsigned i);
     virtual ~RDMAWorker();
-    virtual int listen(entity_addr_t &addr, const SocketOptions &opts, ServerSocket *) override;
+    virtual int listen(entity_addr_t &addr, unsigned addr_slot, const SocketOptions &opts, ServerSocket *) override;
     virtual int connect(const entity_addr_t &addr, const SocketOptions &opts, ConnectedSocket *socket) override;
     virtual void initialize() override;
     int get_reged_mem(RDMAConnectedSocketImpl *o, std::vector<Chunk *> &c, size_t bytes);
@@ -171,7 +173,7 @@ class RDMAConnectedSocketImpl : public ConnectedSocketImpl {
     std::function<void(Chunk *)> txc_callback;
 
    protected:
-    CephContext *cct
+    CephContext *cct;
     Infiniband::QueuePair *qp;
     uint32_t peer_qpn = 0;
     uint32_t local_qpn = 0;

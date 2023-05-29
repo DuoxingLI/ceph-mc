@@ -27,9 +27,18 @@
 #include <string>
 #include <vector>
 
-#include "common/common.h"
+#include "include/common_fwd.h"
+#include "include/int_types.h"
+#include "include/page.h"
+#include "include/scope_guard.h"
+#include "common/debug.h"
+#include "common/errno.h"
+#include "common/ceph_mutex.h"
 #include "common/perf_counters.h"
-#include "network/net_handler.h"
+#include "msg/msg_types.h"
+#include "msg/async/net_handler.h"
+
+#include "common/common.h"
 
 static const uint32_t TCP_MSG_LEN = sizeof("0000:00000000:00000000:00000000:00000000:0000:00000000:0000:00000000000000000000000000000000");
 

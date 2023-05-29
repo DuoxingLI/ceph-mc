@@ -628,13 +628,13 @@ AsyncConnectionRef AsyncMessenger::create_multi_connect(const entity_addrvec_t& 
 {
   ceph_assert(ceph_mutex_is_locked(lock));
 
-  ldout(cct, 10) << __func__ << " " << addrs
+  ldout(cct, 10) << __func__ << " " << addrs1
       << ", creating connection and registering" << dendl;
 
   // here is where we decide which of the addrs to connect to.  always prefer
   // the first one, if we support it.
   entity_addr_t target;
-  for (auto& a : addrs.v) {
+  for (auto& a : addrs1.v) {
     if (!a.is_msgr2() && !a.is_legacy()) {
       continue;
     }
@@ -646,6 +646,7 @@ AsyncConnectionRef AsyncMessenger::create_multi_connect(const entity_addrvec_t& 
 
   // create connection
   Worker *w = stack->get_worker();
+  cct->set_MulticastConnectGroup(addrs1,addrs2);
   auto conn = ceph::make_ref<AsyncConnection>(cct, this, &dispatch_queue, w,
 						target.is_msgr2(), false);
   conn->anon = anon;
@@ -653,11 +654,11 @@ AsyncConnectionRef AsyncMessenger::create_multi_connect(const entity_addrvec_t& 
   if (anon) {
     anon_conns.insert(conn);
   } else {
-    ceph_assert(!conns.count(addrs));
-    ldout(cct, 10) << __func__ << " " << conn << " " << addrs << " "
+    ceph_assert(!conns.count(addrs1));
+    ldout(cct, 10) << __func__ << " " << conn << " " << addrs1 << " "
 		   << *conn->peer_addrs << dendl;
        // addrs1, addrs2 sorted before
-    multi_conns[make_sorted_pair(addrs1,addrs2)] = conn;
+    multi_conns[make_sorted_pair_key(addrs1,addrs2)] = conn;
   }
   w->get_perf_counter()->inc(l_msgr_active_connections);
 
@@ -772,9 +773,9 @@ ConnectionRef AsyncMessenger::connect_to_multi(int type,
 					 bool anon, bool not_local_dest)
 {
   if (!not_local_dest) {
-    if (*my_addrs == addrs ||
-	(addrs.v.size() == 1 &&
-	 my_addrs->contains(addrs.front()))) {
+    if (*my_addrs == addrs_1 ||
+	(addrs_1.v.size() == 1 &&
+	 my_addrs->contains(addrs_1.front()))) {
       // local
       return local_connection;
     }
